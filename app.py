@@ -1,261 +1,202 @@
+from flask import Flask, render_template, request, redirect, session
+from supabase import create_client
+from datetime import datetime, timedelta
 import os
-from datetime import datetime, timedelta, timezone
+import random
+from resend import Emails
 
-from flask import Flask, render_template, request, jsonify, session
-from flask_cors import CORS
-from supabase import create_client, Client
+app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
-# ---------------------------------------------------------
-# APP / SUPABASE
-# ---------------------------------------------------------
-app = Flask(__name__, template_folder="templates", static_folder="static")
-CORS(app)
+# ------------------------
+#   SUPABASE
+# ------------------------
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+supabase = create_client(supabase_url, supabase_key)
 
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "chave_teste")
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-PIX_KEY = os.getenv("PIX_KEY", "SUA_CHAVE_PIX_AQUI")
-
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise RuntimeError("Variáveis SUPABASE_URL / SUPABASE_SERVICE_KEY não configuradas!")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-
-# ---------------------------------------------------------
-# HELPERS
-# ---------------------------------------------------------
-def parse_ts(value):
-    """Converte string/timestamp do Supabase em datetime ou None."""
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        # Supabase costuma mandar '2025-11-15T22:22:55.955288+00:00' ou com 'Z'
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def user_is_active(user: dict) -> tuple[bool, str | None]:
-    """
-    Retorna (ativo, motivo_bloqueio)
-    motivo_bloqueio: 'trial_expired' | 'payment_expired' | None
-    """
-    if not user:
-        return False, "not_found"
-
-    if user.get("is_admin"):
-        # Admin sempre pode entrar
-        return True, None
-
-    plan = user.get("plan") or "trial"
-    trial_end = parse_ts(user.get("trial_end"))
-    paid_until = parse_ts(user.get("paid_until"))
-
-    now = datetime.now(timezone.utc)
-
-    if plan == "trial":
-        if not trial_end or trial_end < now:
-            return False, "trial_expired"
-        return True, None
-
-    if plan == "paid":
-        if not paid_until or paid_until < now:
-            return False, "payment_expired"
-        return True, None
-
-    # Plano desconhecido → bloquear por segurança
-    return False, "unknown_plan"
-
-
-# ---------------------------------------------------------
-# FRONT
-# ---------------------------------------------------------
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-# ---------------------------------------------------------
-# API: LOGIN
-# ---------------------------------------------------------
-@app.route("/api/login", methods=["POST"])
-def login():
-    data = request.json or {}
-    email = data.get("email", "").strip()
-    password = data.get("password", "").strip()
-
-    if not email or not password:
-        return jsonify({"status": "error", "msg": "Informe email e senha."})
-
-    result = (
-        supabase.table("users")
-        .select("*")
-        .eq("email", email)
-        .eq("password", password)
-        .execute()
-    )
-
-    rows = result.data or []
-    if not rows:
-        return jsonify({"status": "error", "msg": "Email ou senha incorretos."})
-
-    user = rows[0]
-
-    ativo, motivo = user_is_active(user)
-    if not ativo:
-        # Usuário existe, mas não tem mais acesso
-        msg = "Seu período de teste acabou. Para continuar, faça o pagamento via PIX."
-        if motivo == "payment_expired":
-            msg = "Seu plano venceu. Renove via PIX para continuar usando."
-
-        return jsonify({
-            "status": "blocked",
-            "reason": motivo,
-            "msg": msg,
-            "pix_key": PIX_KEY,
-            "plans": [
-                {"label": "Mensal",     "price": "49,90",  "days": 30},
-                {"label": "Trimestral", "price": "129,90", "days": 90},
-                {"label": "Semestral",  "price": "219,90", "days": 180},
-            ],
-            "user": {
-                "email": user.get("email"),
-                "plan": user.get("plan"),
-                "trial_end": user.get("trial_end"),
-                "paid_until": user.get("paid_until"),
-            },
-        })
-
-    # Ativo → guardar sessão e liberar dashboard
-    session["user"] = user["email"]
-    session["is_admin"] = user.get("is_admin", False)
-
-    return jsonify({
-        "status": "ok",
-        "msg": "Login autorizado!",
-        "user": {
-            "email": user.get("email"),
-            "is_admin": user.get("is_admin", False),
-            "plan": user.get("plan"),
-            "trial_end": user.get("trial_end"),
-            "paid_until": user.get("paid_until"),
-        },
+# ------------------------
+# Função: enviar código
+# ------------------------
+def enviar_codigo(email, codigo):
+    Emails.send({
+        "from": os.getenv("EMAIL_SENDER"),
+        "to": email,
+        "subject": "Seu código de confirmação - Lanzaca IA",
+        "html": f"<h1>Seu código é <b>{codigo}</b></h1>"
     })
 
 
-# ---------------------------------------------------------
-# API: REGISTRO → vai para pending_users (aguardando aprovação)
-# ---------------------------------------------------------
-@app.route("/api/register", methods=["POST"])
-def register():
-    data = request.json or {}
-    email = data.get("email", "").strip()
-    password = data.get("password", "").strip()
+# =========================================================
+#   ROTAS DO SISTEMA
+# =========================================================
 
-    if not email or not password:
-        return jsonify({"status": "error", "msg": "Informe email e senha."})
-
-    # Já existe na users?
-    exists = (
-        supabase.table("users")
-        .select("email")
-        .eq("email", email)
-        .execute()
-    )
-    if exists.data:
-        return jsonify({"status": "error", "msg": "Email já registrado."})
-
-    # Já está pendente?
-    pending = (
-        supabase.table("pending_users")
-        .select("email")
-        .eq("email", email)
-        .execute()
-    )
-    if pending.data:
-        return jsonify({"status": "error", "msg": "Cadastro já solicitado. Aguarde aprovação."})
-
-    # Inserir na pending_users
-    supabase.table("pending_users").insert({
-        "email": email,
-        "password": password,
-    }).execute()
-
-    return jsonify({"status": "ok", "msg": "Cadastro enviado! Aguarde o admin aprovar."})
+@app.route("/")
+def index():
+    return render_template("loader.html")
 
 
-# ---------------------------------------------------------
-# API: LISTAR PENDENTES (apenas admin)
-# ---------------------------------------------------------
-@app.route("/api/pending", methods=["GET"])
-def pending_users():
-    if not session.get("is_admin"):
-        return jsonify({"status": "error", "msg": "Não autorizado."}), 403
+# ------------------------
+#   Login
+# ------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form["email"]
+        senha = request.form["senha"]
 
-    result = supabase.table("pending_users").select("id, email, created_at").execute()
-    return jsonify({"status": "ok", "pending": result.data or []})
+        res = supabase.table("usuarios").select("*") \
+            .eq("email", email).eq("senha", senha).execute()
 
+        if not res.data:
+            return render_template("login.html", erro="Email ou senha incorretos.")
 
-# ---------------------------------------------------------
-# API: APROVAR USUÁRIO (cria users com 30 dias trial)
-# ---------------------------------------------------------
-@app.route("/api/approve", methods=["POST"])
-def approve_user():
-    if not session.get("is_admin"):
-        return jsonify({"status": "error", "msg": "Não autorizado."}), 403
+        user = res.data[0]
 
-    data = request.json or {}
-    email = data.get("email", "").strip()
+        if not user["confirmado"]:
+            return render_template("login.html", erro="Confirme seu email para continuar.")
 
-    if not email:
-        return jsonify({"status": "error", "msg": "Email não informado."}), 400
+        # Trial expirado?
+        inicio = datetime.fromisoformat(user["trial_started_at"])
+        if datetime.utcnow() > inicio + timedelta(days=30):
+            return redirect("/planos")
 
-    res = (
-        supabase.table("pending_users")
-        .select("*")
-        .eq("email", email)
-        .execute()
-    )
-    rows = res.data or []
-    if not rows:
-        return jsonify({"status": "error", "msg": "Usuário pendente não encontrado."})
+        session["usuario_id"] = user["id"]
+        session["nome"] = user["nome"]
+        session["plano"] = user["plano"]
 
-    pend = rows[0]
+        return redirect("/painel")
 
-    trial_end = datetime.now(timezone.utc) + timedelta(days=30)
-
-    # Cria na users
-    supabase.table("users").insert({
-        "email": pend["email"],
-        "password": pend["password"],
-        "is_admin": False,
-        "plan": "trial",
-        "trial_end": trial_end.isoformat(),
-        "paid_until": None,
-    }).execute()
-
-    # Remove da pending_users
-    supabase.table("pending_users").delete().eq("email", email).execute()
-
-    return jsonify({"status": "ok", "msg": "Usuário aprovado com 30 dias de teste."})
+    return render_template("login.html")
 
 
-# ---------------------------------------------------------
-# API: LOGOUT
-# ---------------------------------------------------------
-@app.route("/api/logout", methods=["POST"])
+# ------------------------
+#   Cadastro
+# ------------------------
+@app.route("/cadastro", methods=["GET", "POST"])
+def cadastro():
+    if request.method == "POST":
+
+        nome = request.form["nome"]
+        telefone = request.form["telefone"]
+        email = request.form["email"]
+        senha = request.form["senha"]
+
+        ip = request.remote_addr
+
+        # Impede vários trials
+        existe = supabase.table("usuarios").select("*") \
+            .or_(f"email.eq.{email},telefone.eq.{telefone},ip.eq.{ip}") \
+            .execute()
+
+        if existe.data:
+            return render_template("cadastro.html",
+                                   erro="Você já usou seu teste grátis.")
+
+        codigo = random.randint(100000, 999999)
+
+        supabase.table("usuarios").insert({
+            "nome": nome,
+            "telefone": telefone,
+            "email": email,
+            "senha": senha,
+            "codigo": codigo,
+            "confirmado": False,
+            "plano": "trial",
+            "status_pagamento": "pendente",
+            "trial_started_at": datetime.utcnow().isoformat(),
+            "ip": ip
+        }).execute()
+
+        enviar_codigo(email, codigo)
+
+        return redirect(f"/confirmar?email={email}")
+
+    return render_template("cadastro.html")
+
+
+# ------------------------
+#   Confirmar código
+# ------------------------
+@app.route("/confirmar", methods=["GET", "POST"])
+def confirmar():
+    email = request.args.get("email")
+
+    if request.method == "POST":
+        codigo_digitado = request.form["codigo"]
+
+        res = supabase.table("usuarios").select("*") \
+            .eq("email", email).execute()
+
+        if not res.data:
+            return "Usuário não encontrado."
+
+        user = res.data[0]
+
+        if str(user["codigo"]) != codigo_digitado:
+            return render_template("confirmar.html", email=email,
+                                   erro="Código incorreto.")
+
+        supabase.table("usuarios").update({"confirmado": True}) \
+            .eq("email", email).execute()
+
+        return redirect("/login")
+
+    return render_template("confirmar.html", email=email)
+
+
+# ------------------------
+# Painel interno
+# ------------------------
+@app.route("/painel")
+def painel():
+    if "usuario_id" not in session:
+        return redirect("/login")
+
+    return render_template("painel.html", nome=session["nome"])
+
+
+# ------------------------
+#   Tela de Planos
+# ------------------------
+@app.route("/planos")
+def planos():
+    return render_template("planos.html")
+
+
+# ------------------------
+#   Página Top 3 (Bloqueada para trial)
+# ------------------------
+@app.route("/top3")
+def top3():
+
+    if "usuario_id" not in session:
+        return redirect("/login")
+
+    if session["plano"] == "trial":
+        return render_template("bloqueado.html")
+
+    # Aqui você vai buscar o Top 3 da IA
+    palpites = [
+        {"jogo": "Palmeiras x Flamengo", "prob": 82, "odd": 1.95},
+        {"jogo": "Corinthians x São Paulo", "prob": 78, "odd": 1.68},
+        {"jogo": "Grêmio x Botafogo", "prob": 71, "odd": 2.10}
+    ]
+
+    return render_template("top3.html", palpites=palpites)
+
+
+# ------------------------
+# Logout
+# ------------------------
+@app.route("/logout")
 def logout():
     session.clear()
-    return jsonify({"status": "ok"})
+    return redirect("/login")
 
 
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
+# =======================================================
+# RUN
+# =======================================================
 if __name__ == "__main__":
-    # Local
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True)
