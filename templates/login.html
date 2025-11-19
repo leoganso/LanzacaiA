@@ -3,129 +3,160 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Palpites IA • Login</title>
+<title>Login • Palpites IA</title>
 
 <style>
     body {
-        background:#000;
-        margin:0;
-        padding:0;
-        height:100vh;
-        display:flex;
-        justify-content:center;
-        align-items:center;
+        margin: 0;
+        padding: 0;
+        background: #000000;
         font-family: 'Segoe UI', Tahoma, sans-serif;
+        color: #ffffff;
+        height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
     }
 
     .container {
-        width:360px;
-        padding:35px 30px;
-        background:rgba(15,15,15,0.9);
-        border-radius:20px;
-        border:2px solid #00ff88;
-        box-shadow:0 0 25px #00ff88;
-        text-align:center;
+        width: 320px;
+        padding: 30px;
+        background: rgba(15, 15, 15, 0.9);
+        border-radius: 20px;
+        border: 2px solid #00ff88;
+        box-shadow: 0 0 20px #00ff88;
+        text-align: center;
+        position: relative;
     }
 
-    /* BOLA NEON */
-    .bola {
-        width:120px;
-        height:120px;
-        border-radius:50%;
-        border:6px solid rgba(0,255,136,0.15);
-        border-top-color:#00ff88;
+    .bola-neon {
+        width: 120px;
+        height: 120px;
+        margin: 0 auto 15px;
+        border-radius: 50%;
+        border: 5px solid rgba(0,255,136,0.2);
+        border-top-color: #00ff88;
         animation: spin 1.6s linear infinite;
-        margin:0 auto 15px;
-        position:relative;
+        position: relative;
     }
 
-    .bola img {
-        width:55px;
-        position:absolute;
-        top:50%;
-        left:50%;
-        transform:translate(-50%, -50%);
-        filter:drop-shadow(0 0 8px #00ff88);
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-    @keyframes spin { to { transform:rotate(360deg); } }
+    .icone-raio {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 55px;
+        height: 55px;
+        transform: translate(-50%, -50%);
+        filter: drop-shadow(0 0 10px #00ff88);
+    }
 
     h1 {
-        color:#00ff88;
-        text-shadow:0 0 15px #00ff88;
-        margin-bottom:25px;
+        margin: 10px 0 25px 0;
+        font-size: 28px;
+        color: #00ff88;
+        text-shadow: 0 0 10px #00ff88;
     }
 
-    input {
-        width:100%;
-        padding:14px;
-        margin-bottom:15px;
-        border-radius:10px;
-        border:2px solid #00ff88;
-        background:#0f0f0f;
-        color:#fff;
-        outline:none;
+    .input-group {
+        text-align: left;
+        margin-bottom: 15px;
     }
 
-    input:focus {
-        box-shadow:0 0 15px #00ff88;
+    .input-group label {
+        font-size: 13px;
+        color: #cccccc;
+    }
+
+    .input-group input {
+        width: 100%;
+        padding: 12px;
+        border-radius: 10px;
+        border: 2px solid #00ff88;
+        background: #0f0f0f;
+        color: #ffffff;
+        outline: none;
+        transition: 0.3s;
+    }
+
+    .input-group input:focus {
+        box-shadow: 0 0 10px #00ff88;
     }
 
     .botao {
-        width:100%;
-        padding:14px;
-        background:#00ff88;
-        color:#000;
-        font-weight:bold;
-        border:none;
-        border-radius:10px;
-        cursor:pointer;
-        box-shadow:0 0 15px #00ff88;
+        width: 100%;
+        padding: 14px;
+        background: #00ff88;
+        color: #000;
+        border: none;
+        border-radius: 10px;
+        font-size: 17px;
+        font-weight: bold;
+        cursor: pointer;
+        margin-top: 10px;
+        box-shadow: 0 0 15px #00ff88;
     }
+
+    .link {
+        margin-top: 15px;
+        display: block;
+        font-size: 14px;
+        color: #00ff88;
+        text-decoration: none;
+    }
+
 </style>
 </head>
-
 <body>
+
 <div class="container">
 
-    <div class="bola">
-        <img src="/static/img/raio.png">
+    <div class="bola-neon">
+        <img src="/static/icons/raio.png" class="icone-raio">
     </div>
 
     <h1>Palpites IA</h1>
 
-    <form id="formLogin">
-        <input type="email" id="email" placeholder="E-mail" required>
-        <input type="password" id="senha" placeholder="Senha" required>
+    <form id="loginForm">
+
+        <div class="input-group">
+            <label>Email</label>
+            <input type="email" name="email" required>
+        </div>
+
+        <div class="input-group">
+            <label>Senha</label>
+            <input type="password" name="senha" required>
+        </div>
 
         <button class="botao" type="submit">➜ Entrar no Sistema</button>
-    </form>
 
-    <a href="/cadastro" style="color:#00ff88;margin-top:12px;display:block;">Não tem conta? Cadastrar</a>
+        <a class="link" href="/cadastro">Não tem conta? Cadastrar</a>
+
+    </form>
 
 </div>
 
 <script>
-document.getElementById("formLogin").addEventListener("submit", async (e)=>{
+document.getElementById("loginForm").addEventListener("submit", async function(e){
     e.preventDefault();
 
-    const email = document.getElementById("email").value;
-    const senha = document.getElementById("senha").value;
+    const email = document.querySelector("input[name='email']").value;
+    const senha = document.querySelector("input[name='senha']").value;
 
-    const r = await fetch("/api/login", {
-        method:"POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({email: email, password: senha})
+    const resposta = await fetch("/api/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ email: email, password: senha })
     });
 
-    const d = await r.json();
+    const data = await resposta.json();
 
-    if (d.status === "ok") {
+    if(data.status === "ok") {
         window.location.href = "/dashboard";
-    } else if (d.status === "blocked") {
-        window.location.href = "/bloqueado";
     } else {
-        alert("Email ou senha inválidos");
+        alert(data.msg || "Email ou senha inválidos");
     }
 });
 </script>
